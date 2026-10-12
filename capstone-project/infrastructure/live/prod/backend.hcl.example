@@ -1,0 +1,12 @@
+# Copy to backend.hcl (git-ignored) and run:
+#   terraform init -backend-config=backend.hcl
+#
+# State is encrypted, versioned and locked with S3 native locking
+# (use_lockfile, Terraform >= 1.10), so two pipelines cannot change the
+# same infrastructure at once (report Appendix B, test T6).
+
+bucket       = "meridian-tfstate-prod-CHANGE-ME"
+key          = "live/prod/terraform.tfstate"
+region       = "eu-west-2"
+encrypt      = true
+use_lockfile = true

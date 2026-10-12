@@ -1,0 +1,8 @@
+# FOR A LOCAL DEMO ONLY (e.g. producing screenshots for the assignment).
+# Rename to backend_override.tf to keep state on your own machine instead of
+# S3. Terraform merges *_override.tf files over the main configuration.
+# backend_override.tf is git-ignored so it is never committed.
+
+terraform {
+  backend "local" {}
+}

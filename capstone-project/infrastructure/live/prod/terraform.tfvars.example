@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored:
+# never commit real account IDs, IPs or ARNs to a public repository.
+
+account_id             = "111122223333"
+portal_image           = "111122223333.dkr.ecr.eu-west-2.amazonaws.com/patient-portal:1.0.0"
+portal_certificate_arn = "arn:aws:acm:eu-west-2:111122223333:certificate/00000000-0000-0000-0000-000000000000"
+portal_ingress_cidrs   = ["203.0.113.0/24"] # documentation range; replace
+
+# vpn_sites = {
+#   hospital-a = { public_ip = "198.51.100.10", bgp_asn = 65001 }
+#   hospital-b = { public_ip = "198.51.100.20", bgp_asn = 65002 }
+# }
