@@ -1,0 +1,150 @@
+# Infrastructure delivery pipeline (report: "The delivery pipeline and its validation", Figure 2).
+# Every pull request runs the checks below. A failed check blocks the merge.
+
+name: terraform
+
+on:
+  pull_request:
+    paths:
+      - "infrastructure/**"
+      - "policies/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * *" # nightly drift check
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # for short-lived AWS credentials via OIDC
+  pull-requests: write
+
+env:
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  # Steps 2-3: format, validate, lint and security scan. No AWS access needed.
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+
+      - name: Format check
+        run: terraform fmt -check -recursive infrastructure
+
+      - name: Validate every module and stack
+        run: |
+          for dir in infrastructure/modules/* infrastructure/live/*; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+      - uses: terraform-linters/setup-tflint@v4
+
+      - name: TFLint
+        run: |
+          tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
+
+      - name: Checkov security scan
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infrastructure
+          framework: terraform
+          soft_fail: false
+
+  # Step 5: module tests with a mock provider. No AWS access needed.
+  module-tests:
+    runs-on: ubuntu-latest
+    needs: static-checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+      - name: terraform test (imaging-archive)
+        working-directory: infrastructure/modules/imaging-archive
+        run: |
+          terraform init -input=false
+          terraform test
+
+  # Steps 4 and 6: plan, policy check and cost estimate. Needs AWS access, so
+  # it runs only when the repository variable ENABLE_AWS_PLAN is set to true
+  # and the AWS secrets below exist.
+  plan:
+    runs-on: ubuntu-latest
+    needs: module-tests
+    if: ${{ vars.ENABLE_AWS_PLAN == 'true' }}
+    env:
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+    defaults:
+      run:
+        working-directory: infrastructure/live/prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+
+      # Short-lived credentials: no long-term AWS keys are stored in GitHub.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: Init
+        run: >
+          terraform init -input=false
+          -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+          -backend-config="key=live/prod/terraform.tfstate"
+          -backend-config="region=eu-west-2"
+          -backend-config="encrypt=true"
+          -backend-config="use_lockfile=true"
+
+      - name: Plan
+        env:
+          TF_VAR_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          TF_VAR_portal_image: ${{ vars.PORTAL_IMAGE }}
+          TF_VAR_portal_certificate_arn: ${{ secrets.PORTAL_CERT_ARN }}
+        # -detailed-exitcode: 0 = no changes, 2 = changes (drift on the nightly run)
+        run: |
+          set +e
+          terraform plan -input=false -detailed-exitcode -out=tfplan
+          code=$?
+          set -e
+          if [ "$code" = "1" ]; then exit 1; fi
+          if [ "$code" = "2" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "::warning::Drift detected: infrastructure differs from code"
+          fi
+          terraform show -json tfplan > plan.json
+
+      - name: Policy check (OPA / conftest)
+        run: |
+          curl -sSL -o conftest.tar.gz \
+            https://github.com/open-policy-agent/conftest/releases/download/v0.55.0/conftest_0.55.0_Linux_x86_64.tar.gz
+          tar -xzf conftest.tar.gz conftest
+          ./conftest test --policy "$GITHUB_WORKSPACE/policies/opa" plan.json
+
+      # Optional cost estimate on the pull request (needs an INFRACOST_API_KEY secret).
+      - name: Cost estimate (Infracost)
+        if: ${{ github.event_name == 'pull_request' && env.INFRACOST_API_KEY != '' }}
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
+          infracost breakdown --path plan.json
+
+  # Steps 7-8: apply only from main, after review, through a protected
+  # GitHub environment that requires two approvals.
+  apply:
+    runs-on: ubuntu-latest
+    needs: plan
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.ENABLE_AWS_PLAN == 'true' }}
+    environment: production # configure required reviewers in repo settings
+    steps:
+      - run: echo "Apply runs here with a separate, short-lived apply role. Left disabled in this sample."
