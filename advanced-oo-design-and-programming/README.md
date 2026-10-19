@@ -2,7 +2,7 @@
 
 ## Advanced Object-Oriented Design and Programming
 
-- [Module e-Portfolio](advanced-oo-design-and-programming/) — reflective piece, individual coding exercise, discussions
+- [Module e-Portfolio](advanced-oo-design-and-programming/) — reflective piece, individual coding exercise
 - [Capstone Project](advanced-oo-design-and-programming/capstone-project/) — Tasks 1–4, design-pattern artefacts, source code, tests and the submitted report
 
 ## Cloud Operations and Management
